@@ -1,5 +1,5 @@
 <?php
-namespace app\components\widgets;
+namespace app\widgets;
 
 use Yii;
 use yii\base\Widget;
@@ -7,7 +7,7 @@ use yii\data\DataProviderInterface;
 use yii\helpers\Html;
 use yii\widgets\ListView;
 
-class TopicWidget extends Widget
+class TopicsWidget extends Widget
 {
     /**
      * @var DataProviderInterface|null 
@@ -20,9 +20,9 @@ class TopicWidget extends Widget
     public $topics;
 
     /**
-     * @var string путь к файлу item view (относительно @app/views). По умолчанию widgets/_topic.php
+     * @var string путь к файлу item view
      */
-    public $itemView = '@app/components/widgets/views/_topic.php';
+    public $itemView = '@app/widgets/views/_topic.php';
 
     /**
      * @var array html-атрибуты для wrapper <main>

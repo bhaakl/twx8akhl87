@@ -2,7 +2,7 @@
 namespace app\models;
 
 use yii\db\ActiveRecord;
-use yii\db\Expression;
+use app\helpers\SvAppHelper; 
 
 /**
  * Class Topic
@@ -33,14 +33,14 @@ class Topic extends ActiveRecord
     public function rules()
     {
         return [
-            [['title', 'author_id', 'datetime'], 'required'],
+            [['title', 'author_id', 'datetime'], 'required', 'message' => 'Поле {attribute} не должно быть пустым'],
             [['author_id'], 'integer'],
             [['excerpt'], 'string'],
             [['datetime', 'created_at', 'updated_at'], 'safe'],
             [['title'], 'string', 'max' => 512],
             [['url'], 'string', 'max' => 1024],
-            // optionally validate that author exists
-            ['author_id', 'exist', 'skipOnError' => true, 'targetClass' => Author::class, 'targetAttribute' => ['author_id' => 'id']],
+            // author exists validate
+            ['author_id', 'exist', 'skipOnError' => false, 'targetClass' => Author::class, 'targetAttribute' => ['author_id' => 'id']],
         ];
     }
 
@@ -65,18 +65,32 @@ class Topic extends ActiveRecord
     }
 
     /**
-     * Setter helper: accepts string or array. If array -> json_encode for storage.
-     * Use $topic->excerpt = $value; as usual.
+     * Setter helper for Author
+     */
+    public function setAuthor(Author $author)
+    {
+        if ($author->save()) {
+            $this->link('author', $author);
+            return true;
+        } 
+        SvAppHelper::showErrors($this, 'Topic error');
+        return false;
+    }
+
+    /**
+     * Setter helper: accepts string or array. If array -> implode for storage.
      *
      * @param mixed $value
      */
     public function setExcerpt($value)
     {
         if (is_array($value)) {
-            $this->setAttribute('excerpt', json_encode(array_values($value), JSON_UNESCAPED_UNICODE));
-        } else {
-            $this->setAttribute('excerpt', (string)$value);
-        }
+            $phs = array_values(array_filter($value, function($val) {
+                return trim($val) !== '';
+            }));
+            $ex = implode("\n", $phs);
+            $this->setAttribute('excerpt', $ex);
+        } else $this->setAttribute('excerpt', (string)$value);
     }
 
     /**
@@ -104,7 +118,10 @@ class Topic extends ActiveRecord
     {
         $ex = $this->getExcerpt();
         if (is_array($ex)) {
-            return implode(' ', $ex);
+            $result = array_values(array_filter($ex, function($value) {
+                return trim($value) !== '';
+            }));
+            return implode('\n', $result);
         }
         return (string)$ex;
     }

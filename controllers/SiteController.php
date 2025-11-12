@@ -2,11 +2,15 @@
 
 namespace app\controllers;
 
+use app\models\dto\AuthorDto;
+use app\models\form\AuthorForm;
 use Yii;
 use yii\filters\AccessControl;
+use yii\helpers\ArrayHelper;
 use yii\web\Controller;
 use yii\web\Response;
 use yii\filters\VerbFilter;
+use yii\widgets\ActiveForm;
 use app\models\LoginForm;
 use app\models\ContactForm;
 use app\models\Topic;
@@ -35,6 +39,7 @@ class SiteController extends Controller
                 'class' => VerbFilter::class,
                 'actions' => [
                     'logout' => ['post'],
+                    // 'send-msg' => ['post'],
                 ],
             ],
         ];
@@ -64,25 +69,78 @@ class SiteController extends Controller
     public function actionIndex()
     {
         $faker = \Faker\Factory::create();
-        // dd($faker->paragraphs);
-        $topics = [];
-        for ($i = 0; $i < 10; $i++) {
-            $topic = new Topic();
-            $topic->title = $faker->name;
-            $topic->authorName = $faker->name;
-            $topic->authorUrl = $faker->url();
-            $topic->datetime = date('Y-m-d');
-            $topic->setExcerpt($faker->paragraphs);
-            $topic->url = $faker->url();
-            $topics[] = $topic;
+        $model = new AuthorForm();
+
+        // $aut = Author::find()->where(['id' => ])->one();
+        // $top = Topic::find()->where(['id' => 265664753])->one();
+        // dd($aut);
+        // for ($i = 0; $i < 3; $i++) {
+        //     $author = new Author();
+        //     $author->email = $faker->email;
+        //     $author->name = $faker->name;
+        //     $author->msg = $faker->text;
+
+        //     $topic = new Topic();
+        //     $topic->title = $faker->sentence;
+        //     $topic->datetime = date('Y-m-d');
+        //     $topic->setExcerpt($faker->paragraphs(10));
+        //     $topic->url = $faker->url();
+        //     $topic->setAuthor($author);
+        //     $topics[] = $topic;
+        // }
+
+        
+        $res = $this->prepareSubmit($model);
+        if ($res !== null) {
+            return $res;
         }
 
-        $model = new Author();
+        $topics = Topic::find()->all();
         
         return $this->render('index', [
             'topics' => $topics,
-            'model' => $model,
+            'model' => $model
         ]);
+    }
+
+    /**
+     * Handle form submit. Returns:
+     *  - null        => no POST or render should continue (render index)
+     *  - Response    => redirect 
+     */
+    private function prepareSubmit($aform)
+     {
+        $request = Yii::$app->request;
+
+        if (!$aform->load($request->post()) || !$aform->validate()) {
+            return null;
+        }
+
+        $author = new Author();
+        $author->name = $aform->name;
+        $author->email = $aform->email;
+        $author->msg = $aform->msg;
+        
+        $faker = \Faker\Factory::create();
+        $topic = new Topic();
+        $topic->title = $author->name;
+        $topic->datetime = date('Y-m-d');
+        $topic->url = $faker->url();
+        if (str_contains($author->msg, '\n'))
+            $paragraphs = explode("\n", $author->msg);
+        else $paragraphs[] = $author->msg;
+        $topic->setExcerpt($paragraphs);
+        // dd($topic->excerpt);
+        $record_saved = $topic->setAuthor($author);
+        if ($record_saved) {
+            Yii::$app->session->setFlash('success', 'Ваше сообщение отправлено.');
+            return $this->redirect($request->referrer ?: ['site/index']);
+        } 
+        
+        Yii::error($author->getErrors(), __METHOD__);
+
+        Yii::$app->session->setFlash('error', 'Не удалось сохранить данные. Попробуйте позже.');
+        return $this->redirect($request->referrer ?: ['site/index']);
     }
 
     /**

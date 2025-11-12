@@ -30,10 +30,12 @@ $get = function($key, $default = null) use ($model) {
 
 $title = $get('title', 'Без названия');
 $url   = $get('url', '#');
-$image = $get('image', '/assets/images/default.jpg');
 $datetime = $get('datetime', $get('created_at', null));
 
 $excerpt = $get('excerpt', $get('summary', $get('content', '')));
+if ($excerpt != null && $excerpt !== '') {
+    $excerpt = str_contains($excerpt, "\n") ? explode("\n", $excerpt) : $excerpt;
+}
 
 $authorName = $get('authorName', $get('author', ''));
 $authorUrl  = $get('authorUrl', $get('author_url', null));
@@ -65,7 +67,7 @@ if ($datetime) {
     }
 }
 ?>
-<article class="bg-white rounded-3 shadow-sm p-4 mb-4">
+<article class="bg-white rounded shadow-sm p-4 mb-4">
   <header class="mb-3">
     <h2 class="h5 mb-2">
       <?= Html::a($encodedTitle, $encodedUrl, ['class' => 'text-dark text-decoration-none']) ?>
@@ -90,7 +92,7 @@ if ($datetime) {
     </div>
   </header>
 
-  <div class="topic-content__text">
+  <div class="topic-content-text">
     <?php if (is_array($excerpt)): ?>
         <?php foreach ($excerpt as $ex): ?>
             <?php if ($ex === null || $ex === '') continue; ?>

@@ -17,21 +17,9 @@ use yii\db\ActiveRecord;
  */
 class Author extends ActiveRecord
 {
-    public $verifyCode;
     public static function tableName()
     {
         return '{{%authors}}';
-    }
-
-    public function rules()
-    {
-        return [
-            [['name', 'email', 'msg'], 'required'],
-            [['email'], 'email'],
-            [['msg'], 'string'],
-            [['name', 'email'], 'string', 'max' => 255],
-            ['verifyCode', 'captcha'],
-        ];
     }
 
     public function attributeLabels()
@@ -40,7 +28,6 @@ class Author extends ActiveRecord
             'name' => 'Имя автора',
             'email' => 'E-mail',
             'msg' => 'Сообщение',
-            'verifyCode' => 'Код с картинки',
         ];
     }
 
@@ -50,6 +37,6 @@ class Author extends ActiveRecord
      */
     public function getTopics()
     {
-        return $this->hasMany(Topic::class, ['author_id' => 'id']);
+        return $this->hasMany(Topic::class, ['author_id' => 'id'])->inverseOf('author');
     }
 }
