@@ -9,11 +9,12 @@ use yii\captcha\Captcha;
 
 $formId = 'send-form';
 $emailId = 'form-email';
+
 ?>
 
 <?= Html::beginTag('aside', $options) ?>
-  <div class="other-topics">
-    <div class="shadow-sm px-3 pb-3">
+  <div class="sidebar-block shadow-sm">
+    <div class="px-3 pb-2">
         <h2 class="h5 mb-3">Оставить сообщение</h2>
         <?php $form = ActiveForm::begin([
             'id' => $formId,

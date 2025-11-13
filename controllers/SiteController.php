@@ -2,15 +2,12 @@
 
 namespace app\controllers;
 
-use app\models\dto\AuthorDto;
 use app\models\form\AuthorForm;
 use Yii;
 use yii\filters\AccessControl;
-use yii\helpers\ArrayHelper;
 use yii\web\Controller;
 use yii\web\Response;
 use yii\filters\VerbFilter;
-use yii\widgets\ActiveForm;
 use app\models\LoginForm;
 use app\models\ContactForm;
 use app\models\Topic;
@@ -39,7 +36,6 @@ class SiteController extends Controller
                 'class' => VerbFilter::class,
                 'actions' => [
                     'logout' => ['post'],
-                    // 'send-msg' => ['post'],
                 ],
             ],
         ];
@@ -70,32 +66,13 @@ class SiteController extends Controller
     {
         $faker = \Faker\Factory::create();
         $model = new AuthorForm();
-
-        // $aut = Author::find()->where(['id' => ])->one();
-        // $top = Topic::find()->where(['id' => 265664753])->one();
-        // dd($aut);
-        // for ($i = 0; $i < 3; $i++) {
-        //     $author = new Author();
-        //     $author->email = $faker->email;
-        //     $author->name = $faker->name;
-        //     $author->msg = $faker->text;
-
-        //     $topic = new Topic();
-        //     $topic->title = $faker->sentence;
-        //     $topic->datetime = date('Y-m-d');
-        //     $topic->setExcerpt($faker->paragraphs(10));
-        //     $topic->url = $faker->url();
-        //     $topic->setAuthor($author);
-        //     $topics[] = $topic;
-        // }
-
         
         $res = $this->prepareSubmit($model);
         if ($res !== null) {
             return $res;
         }
 
-        $topics = Topic::find()->all();
+        $topics = Topic::find()->with('author')->all();
         
         return $this->render('index', [
             'topics' => $topics,
@@ -104,12 +81,13 @@ class SiteController extends Controller
     }
 
     /**
-     * Handle form submit. Returns:
-     *  - null        => no POST or render should continue (render index)
+     * Helper form submit. Returns:
+     *  - null        => render should continue (render index)
      *  - Response    => redirect 
      */
     private function prepareSubmit($aform)
      {
+        // dd(['14\'th author' => Author::findOne(14)]);
         $request = Yii::$app->request;
 
         if (!$aform->load($request->post()) || !$aform->validate()) {
@@ -130,16 +108,40 @@ class SiteController extends Controller
             $paragraphs = explode("\n", $author->msg);
         else $paragraphs[] = $author->msg;
         $topic->setExcerpt($paragraphs);
-        // dd($topic->excerpt);
-        $record_saved = $topic->setAuthor($author);
-        if ($record_saved) {
-            Yii::$app->session->setFlash('success', 'Ваше сообщение отправлено.');
-            return $this->redirect($request->referrer ?: ['site/index']);
-        } 
-        
-        Yii::error($author->getErrors(), __METHOD__);
 
-        Yii::$app->session->setFlash('error', 'Не удалось сохранить данные. Попробуйте позже.');
+        $author_exist = Author::findOne(['email' => $author->email]);
+        if ($author_exist) {
+            $author_exist->name = $author->name;
+            $author_exist->msg = $author->msg;
+            $author = $author_exist;
+            $topic->author_id = $author_exist->id;
+        }
+        if ($topic->validate()) {
+            $record_saved = $topic->setAuthor($author);
+            if ($record_saved && $topic->save(false)) {
+                Yii::$app->session->setFlash('success', 'Сообщение успешно опубликован.');
+                return $this->refresh();
+
+            } else {
+                Yii::$app->session->setFlash('error', 'Не удалось сохранить данные. Попробуйте позже.');
+                return $this->redirect($request->referrer ?: ['site/index']);
+            }
+        } else {
+            if ($author->hasErrors()) {
+                Yii::error($author->getErrors(), __METHOD__);
+                $msgs = $author->getErrors();
+                Yii::$app->session->setFlash('error', implode('. ', $msgs));
+            }
+                
+            Yii::error($topic->getErrors(), __METHOD__);
+            if ($topic->hasErrors('author_id')) {
+                $msgs = $topic->getErrors('author_id');
+                dd($msgs);
+                Yii::$app->session->setFlash('error', implode('. ', $msgs));
+            }
+
+        }
+        
         return $this->redirect($request->referrer ?: ['site/index']);
     }
 

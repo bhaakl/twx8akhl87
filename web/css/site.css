@@ -97,13 +97,14 @@ a.desc:after {
   margin-top: 1em;
 }
 
-.other-topics {
+.sidebar-block {
   padding: 0 0 32px 0;
   margin-top: 32px;
+  border-radius: 0.375rem;
 }
 
 @media (min-width: 1280px) {
-  .other-topics {
+  .sidebar-block {
     position: sticky;
     top: 77px;
     right: 0;

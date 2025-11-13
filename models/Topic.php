@@ -12,6 +12,8 @@ use app\helpers\SvAppHelper;
  * @property int $author_id
  * @property string $datetime
  * @property string|null $excerpt
+ * @property int $published_at
+ * @property string|null $ip
  * @property string|null $url
  * @property string|null $created_at
  * @property string|null $updated_at
@@ -20,10 +22,7 @@ use app\helpers\SvAppHelper;
  */
 class Topic extends ActiveRecord
 {
-    /**
-     * If excerpt is stored as JSON (array), we decode in getter.
-     * If you prefer always string, store plain text.
-     */
+    const RATE_SECONDS = 180; // 3 минуты
 
     public static function tableName()
     {
@@ -33,9 +32,28 @@ class Topic extends ActiveRecord
     public function rules()
     {
         return [
-            [['title', 'author_id', 'datetime'], 'required', 'message' => 'Поле {attribute} не должно быть пустым'],
+            // allowing tags: b, i, s
+            ['excerpt', 'filter', 
+                'filter' => function($value) {
+                    if ($value === null || $value === '') {
+                        return $value;
+                    }
+                    return \yii\helpers\HtmlPurifier::process($value, [
+                        'HTML.Allowed' => 'b,i,s',
+                        'AutoFormat.RemoveEmpty' => true,
+                    ]);
+                },
+            ],
+            [['title', 'datetime'], 'required', 'message' => 'Поле {attribute} не должно быть пустым'],
             [['author_id'], 'integer'],
             [['excerpt'], 'string'],
+            [['title', 'excerpt'], 'filter', 'filter' => 'trim'],
+            // запрет сообщения на whitespace
+            ['excerpt', 'validateNotBlank'],
+            // rate-limit: кастомная валидация
+            ['author_id', 'validateRateLimit'],
+            [['published_at'], 'integer'],
+            [['ip'], 'string', 'max' => 45],
             [['datetime', 'created_at', 'updated_at'], 'safe'],
             [['title'], 'string', 'max' => 512],
             [['url'], 'string', 'max' => 1024],
@@ -48,10 +66,9 @@ class Topic extends ActiveRecord
     {
         return [
             'title' => 'Заголовок',
-            'author_id' => 'Автор',
-            'datetime' => 'Дата публикации',
-            'excerpt' => 'Анонс',
-            'url' => 'Ссылка',
+            'excerpt' => 'Содержимое',
+            'published_at' => 'Дата публикации (unix)',
+            'ip' => 'IP',
         ];
     }
 
@@ -62,6 +79,87 @@ class Topic extends ActiveRecord
     public function getAuthor()
     {
         return $this->hasOne(Author::class, ['id' => 'author_id']);
+    }
+
+    /**
+     * whitespace validator.
+     */
+    public function validateNotBlank($attribute, $params)
+    {
+        $value = $this->$attribute;
+        if ($value === null) {
+            return;
+        }
+        if (is_array($value)) {
+            $value = implode(' ', $value);
+        }
+        // trim whitespace (including NBSP)
+        $stripped = preg_replace('/\s+/u', '', $value);
+        if ($stripped === '') {
+            $this->addError($attribute, 'Сообщение не может состоять только из пробелов.');
+        }
+    }
+
+    /**
+     * rate limiting validator - no more than 1 message per RATE_SECONDS for a single author.
+     *
+     * Проверяет последний сохранённый топик данного автора (по author_id).
+     * Если последний топик был опубликован позже, чем (now - RATE_SECONDS), добавляет ошибку с указанием времени,
+     * когда можно опубликовать следующее сообщение.
+     */
+    public function validateRateLimit($attribute, $params)
+    {
+        if (empty($this->author_id)) {
+            return;
+        }
+
+        $last = self::find()
+            ->where(['author_id' => $this->author_id])
+            ->andWhere(['>', 'published_at', 0])
+            ->orderBy(['published_at' => SORT_DESC])
+            ->limit(1)
+            ->one();
+
+        if ($last && $last->published_at > 0) {
+            $allowedAt = (int)$last->published_at + self::RATE_SECONDS;
+            $now = time();
+            if ($allowedAt > $now) {
+                $when = \Yii::$app->formatter->asDatetime($allowedAt, 'php:H:i:s');
+                $wait = $allowedAt - $now;
+
+                $minutes = floor($wait / 60);
+                $seconds = $wait % 60;
+                $this->addError($attribute, "Вы можете опубликовать следующее сообщение не ранее $when (через {$minutes}м {$seconds}с).");
+            }
+        }
+    }
+
+     /**
+     * beforeSave: published_at (unix) / ip when insert scenario / created_at & updated_at setting
+     */
+    public function beforeSave($insert)
+    {
+        if (!parent::beforeSave($insert)) {
+            return false;
+        }
+
+        if ($insert) {
+            if (empty($this->published_at)) {
+                $this->published_at = time();
+            }
+            $ip = \Yii::$app->request->userIP ?? null;
+            if ($ip) {
+                $this->ip = $ip;
+            }
+        } else {
+            $now = (new \DateTime())->format('Y-m-d H:i:s');
+            if ($insert && empty($this->created_at)) {
+                $this->created_at = $now;
+            }
+            $this->updated_at = $now;
+        }
+
+        return true;
     }
 
     /**
@@ -124,22 +222,5 @@ class Topic extends ActiveRecord
             return implode('\n', $result);
         }
         return (string)$ex;
-    }
-
-    /**
-     * Optionally update timestamps on save:
-     */
-    public function beforeSave($insert)
-    {
-        if (parent::beforeSave($insert)) {
-            // set created_at/updated_at as DATETIME strings
-            $now = (new \DateTime())->format('Y-m-d H:i:s');
-            if ($insert && empty($this->created_at)) {
-                $this->created_at = $now;
-            }
-            $this->updated_at = $now;
-            return true;
-        }
-        return false;
     }
 }

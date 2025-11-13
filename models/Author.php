@@ -39,4 +39,23 @@ class Author extends ActiveRecord
     {
         return $this->hasMany(Topic::class, ['author_id' => 'id'])->inverseOf('author');
     }
+
+    /**
+     * beforeSave: created_at & updated_at setting
+     */
+    public function beforeSave($insert)
+    {
+        if (!parent::beforeSave($insert)) {
+            return false;
+        }
+
+        $now = (new \DateTime())->format('Y-m-d H:i:s');
+        if ($insert) {
+            $this->created_at = $now;
+        } else {
+            $this->updated_at = $now;
+        }
+
+        return true;
+    }
 }
