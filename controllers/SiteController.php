@@ -6,10 +6,7 @@ use app\models\form\AuthorForm;
 use Yii;
 use yii\filters\AccessControl;
 use yii\web\Controller;
-use yii\web\Response;
 use yii\filters\VerbFilter;
-use app\models\LoginForm;
-use app\models\ContactForm;
 use app\models\Topic;
 use app\models\Author;
 
@@ -23,19 +20,22 @@ class SiteController extends Controller
         return [
             'access' => [
                 'class' => AccessControl::class,
-                'only' => ['logout'],
+                'only' => ['index'],
                 'rules' => [
                     [
-                        'actions' => ['logout'],
+                        'actions' => ['index'],
                         'allow' => true,
-                        'roles' => ['@'],
+                        'roles' => ['@', '?'],
                     ],
                 ],
             ],
             'verbs' => [
                 'class' => VerbFilter::class,
                 'actions' => [
-                    'logout' => ['post'],
+                'index' => ['GET', 'POST'],
+                'edit-topic' => ['GET', 'POST'],
+                'delete' => ['POST'],
+                'delete-confirm' => ['GET'],
                 ],
             ],
         ];
@@ -57,23 +57,29 @@ class SiteController extends Controller
         ];
     }
 
-    /**
-     * Displays homepage.
+   /**
+     * Display the main topics list page.
      *
-     * @return string
-     */
+     * Shows published (non-deleted) topics and prepares the contact/author form.
+     *
+     * @return string Rendered index page.
+    */
     public function actionIndex()
     {
         $faker = \Faker\Factory::create();
         $model = new AuthorForm();
-        
+
         $res = $this->prepareSubmit($model);
         if ($res !== null) {
             return $res;
         }
 
-        $topics = Topic::find()->with('author')->all();
-        
+        $topics = Topic::find()
+        ->with('author')
+        ->where(['deleted_at' => null])
+        ->orderBy(['published_at' => SORT_DESC])
+        ->all();
+
         return $this->render('index', [
             'topics' => $topics,
             'model' => $model
@@ -83,11 +89,10 @@ class SiteController extends Controller
     /**
      * Helper form submit. Returns:
      *  - null        => render should continue (render index)
-     *  - Response    => redirect 
+     *  - Response    => redirect
      */
     private function prepareSubmit($aform)
-     {
-        // dd(['14\'th author' => Author::findOne(14)]);
+    {
         $request = Yii::$app->request;
 
         if (!$aform->load($request->post()) || !$aform->validate()) {
@@ -98,15 +103,28 @@ class SiteController extends Controller
         $author->name = $aform->name;
         $author->email = $aform->email;
         $author->msg = $aform->msg;
-        
+
         $faker = \Faker\Factory::create();
         $topic = new Topic();
         $topic->title = $author->name;
         $topic->datetime = date('Y-m-d');
         $topic->url = $faker->url();
-        if (str_contains($author->msg, '\n'))
-            $paragraphs = explode("\n", $author->msg);
-        else $paragraphs[] = $author->msg;
+
+         $paragraphs = [];
+        if (mb_strpos($author->msg, "\n") !== false) {
+            $parts = preg_split("/\r\n|\n|\r/", $author->msg);
+            foreach ($parts as $p) {
+                $p = trim($p);
+                if ($p !== '') {
+                    $paragraphs[] = $p;
+                }
+            }
+            if (empty($paragraphs)) {
+                $paragraphs[] = trim($author->msg);
+            }
+        } else {
+            $paragraphs[] = trim($author->msg);
+        }
         $topic->setExcerpt($paragraphs);
 
         $author_exist = Author::findOne(['email' => $author->email]);
@@ -116,12 +134,16 @@ class SiteController extends Controller
             $author = $author_exist;
             $topic->author_id = $author_exist->id;
         }
+
+        $topic->generateManagementTokens();
+
         if ($topic->validate()) {
             $record_saved = $topic->setAuthor($author);
             if ($record_saved && $topic->save(false)) {
+                $this->sendManagementMail($author->email, $author->name, $topic);
+
                 Yii::$app->session->setFlash('success', 'Сообщение успешно опубликован.');
                 return $this->refresh();
-
             } else {
                 Yii::$app->session->setFlash('error', 'Не удалось сохранить данные. Попробуйте позже.');
                 return $this->redirect($request->referrer ?: ['site/index']);
@@ -132,78 +154,181 @@ class SiteController extends Controller
                 $msgs = $author->getErrors();
                 Yii::$app->session->setFlash('error', implode('. ', $msgs));
             }
-                
+
             Yii::error($topic->getErrors(), __METHOD__);
             if ($topic->hasErrors('author_id')) {
                 $msgs = $topic->getErrors('author_id');
-                dd($msgs);
                 Yii::$app->session->setFlash('error', implode('. ', $msgs));
             }
-
         }
-        
+
         return $this->redirect($request->referrer ?: ['site/index']);
     }
 
     /**
-     * Login action.
+     * Display edit form or update topic via a private edit token.
      *
-     * @return Response|string
+     * GET: show the edit form if the edit token is valid and the edit window (12 hours) is open.
+     * POST: accept edited message content, validate the same rules as on creation, save changes.
+     *
+     * @param string $token Private edit token sent to the author by email.
+     * @return string|\yii\web\Response Render form (GET) or redirect after POST.
+     * @throws \yii\web\NotFoundHttpException if token is invalid or topic not found.
      */
-    public function actionLogin()
+    public function actionEditTopic($token)
     {
-        if (!Yii::$app->user->isGuest) {
-            return $this->goHome();
+        $topic = Topic::find()->where(['edit_token' => $token])->one();
+        if (!$topic || !$topic->canEdit()) {
+            Yii::$app->session->setFlash('error', 'Ссылка недействительна или срок редактирования истёк.');
+            return $this->redirect(['site/index']);
         }
 
-        $model = new LoginForm();
-        if ($model->load(Yii::$app->request->post()) && $model->login()) {
-            return $this->goBack();
+        // позволяем редактировать только содержание (excerpt)
+        if (Yii::$app->request->isPost) {
+            $post = Yii::$app->request->post();
+            $msg = $post['excerpt'] ?? null;
+            if ($msg === null) {
+                Yii::$app->session->setFlash('error', 'Данные не переданы.');
+                return $this->refresh();
+            }
+            // trim and validate not only-spaces
+            $msgTrim = trim($msg);
+            if ($msgTrim === '' || preg_replace('/\s+/u', '', $msgTrim) === '') {
+                Yii::$app->session->setFlash('error', 'Сообщение не может состоять исключительно из пробелов.');
+                return $this->refresh();
+            }
+            // параграфы
+            $paragraphs = [];
+            if (mb_strpos($msgTrim, "\n") !== false) {
+                $parts = preg_split("/\r\n|\n|\r/", $msgTrim);
+                foreach ($parts as $p) {
+                    $p = trim($p);
+                    if ($p !== '') {
+                        $paragraphs[] = $p;
+                    }
+                }
+                if (empty($paragraphs)) {
+                    $paragraphs[] = $msgTrim;
+                }
+            } else {
+                $paragraphs[] = $msgTrim;
+            }
+
+            $topic->setExcerpt($paragraphs);
+
+            if ($topic->validate(['excerpt'])) {
+                if ($topic->save(false, ['excerpt', 'updated_at'])) {
+                    Yii::$app->session->setFlash('success', 'Топик успешно обновлён.');
+                    return $this->redirect(['site/index']);
+                } else {
+                    Yii::$app->session->setFlash('error', 'Не удалось сохранить изменения.');
+                    return $this->refresh();
+                }
+            } else {
+                Yii::$app->session->setFlash('error', implode('. ', $topic->getFirstErrors()));
+                return $this->refresh();
+            }
         }
 
-        $model->password = '';
-        return $this->render('login', [
-            'model' => $model,
-        ]);
+        return $this->render('edit-topic', ['topic' => $topic]);
     }
 
     /**
-     * Logout action.
+     * Show delete confirmation page for a topic by private delete token.
      *
-     * @return Response
-     */
-    public function actionLogout()
-    {
-        Yii::$app->user->logout();
-
-        return $this->goHome();
-    }
-
-    /**
-     * Displays contact page.
+     * GET: display a confirmation page if the delete token is valid and the delete window (14 days) is open.
      *
-     * @return Response|string
+     * @param string $token Private delete token sent to the author by email.
+     * @return string Render confirmation page.
+     * @throws \yii\web\NotFoundHttpException if token is invalid or topic not found.
      */
-    public function actionContact()
+    public function actionDeleteConfirm($token)
     {
-        $model = new ContactForm();
-        if ($model->load(Yii::$app->request->post()) && $model->contact(Yii::$app->params['adminEmail'])) {
-            Yii::$app->session->setFlash('contactFormSubmitted');
-
-            return $this->refresh();
+        $topic = Topic::find()->where(['delete_token' => $token])->one();
+        if (!$topic || !$topic->canDelete()) {
+            Yii::$app->session->setFlash('error', 'Ссылка недействительна или срок удаления истёк.');
+            return $this->redirect(['site/index']);
         }
-        return $this->render('contact', [
-            'model' => $model,
-        ]);
+
+        return $this->render('delete-confirm', ['topic' => $topic]);
     }
 
+
     /**
-     * Displays about page.
+     * Perform soft delete of a topic (POST only).
      *
-     * @return string
+     * Expects a POST request with a valid delete token. Marks the topic as deleted
+     * by setting deleted_at (soft delete). Returns a PRG redirect and a flash message.
+     *
+     * @param string $token Private delete token.
+     * @return \yii\web\Response Redirect to index after action.
+     * @throws \yii\web\BadRequestHttpException if request is not POST.
+     * @throws \yii\web\NotFoundHttpException if token is invalid or topic not found.
      */
-    public function actionAbout()
+    public function actionDelete($token)
     {
-        return $this->render('about');
+        $request = Yii::$app->request;
+        if (!$request->isPost) {
+            return $this->redirect(['site/index']);
+        }
+
+        $topic = Topic::find()->where(['delete_token' => $token])->one();
+        if (!$topic) {
+            Yii::$app->session->setFlash('error', 'Топик не найден.');
+            return $this->redirect(['site/index']);
+        }
+
+        if (!$topic->canDelete()) {
+            Yii::$app->session->setFlash('error', 'Срок удаления истёк или пост уже удалён.');
+            return $this->redirect(['site/index']);
+        }
+
+        if ($topic->softDelete()) {
+            Yii::$app->session->setFlash('success', 'Пост помечен как удалённый.');
+        } else {
+            Yii::$app->session->setFlash('error', 'Не удалось пометить пост как удалённый.');
+        }
+
+        return $this->redirect(['site/index']);
+    }
+
+   /**
+     * Send management email with private edit/delete links.
+     *
+     * Composes and sends an email to the post author containing private edit and delete URLs.
+     * Must set a From header (either via messageConfig or setFrom here).
+     *
+     * @param string $toEmail Recipient email address.
+     * @param string $toName Recipient display name.
+     * @param \app\models\Topic $topic Topic model (must have tokens).
+     * @return bool True when mailer->send() returns true.
+     */
+    protected function sendManagementMail(string $toEmail, string $toName, Topic $topic)
+    {
+        $editUrl = $topic->getEditUrl(true);
+        $deleteUrl = $topic->getDeleteUrl(true);
+
+        $subject = 'Управление вашим опубликованным сообщением';
+        $body = "Здравствуйте, {$toName}!\n\n"
+            . "Спасибо — ваше сообщение было опубликовано.\n\n"
+            . "С помощью приватных ссылок ниже вы можете управлять своим постом:\n\n"
+            . "Редактировать (доступно в течение 12 часов):\n{$editUrl}\n\n"
+            . "Удалить (подтверждение, доступно в течение 14 дней):\n{$deleteUrl}\n\n"
+            . "Если вы не отправляли это сообщение, проигнорируйте это письмо.\n\n"
+            . "С уважением,\nАдминистрация сайта";
+
+        // mailer (в debug-режиме Yii покажет содержимое письма в runtime/log)
+        try {
+            $mailer = Yii::$app->mailer->compose()
+                ->setTo($toEmail)
+                ->setSubject($subject)
+                ->setTextBody($body);
+
+            if (!$mailer->send()) {
+                Yii::warning("Mailer returned false when sending management mail to {$toEmail}", __METHOD__);
+            }
+        } catch (\Throwable $e) {
+            Yii::error("Failed to send management mail: " . $e->getMessage(), __METHOD__);
+        }
     }
 }

@@ -1,8 +1,10 @@
 <?php
+
 namespace app\models;
 
 use yii\db\ActiveRecord;
-use app\helpers\SvAppHelper; 
+use app\helpers\SvAppHelper;
+use yii\helpers\Url;
 
 /**
  * Class Topic
@@ -24,6 +26,9 @@ class Topic extends ActiveRecord
 {
     const RATE_SECONDS = 180; // 3 минуты
 
+    const EDIT_WINDOW_SECONDS = 43200; // 12 часов = 43200 секунд
+    const DELETE_WINDOW_SECONDS = 1209600; // 14 дней = 14*24*3600 = 1209600
+
     public static function tableName()
     {
         return '{{%topics}}';
@@ -33,8 +38,8 @@ class Topic extends ActiveRecord
     {
         return [
             // allowing tags: b, i, s
-            ['excerpt', 'filter', 
-                'filter' => function($value) {
+            ['excerpt', 'filter',
+                'filter' => function ($value) {
                     if ($value === null || $value === '') {
                         return $value;
                     }
@@ -162,6 +167,69 @@ class Topic extends ActiveRecord
         return true;
     }
 
+     /**
+     * Генерирует приватные токены (edit и delete) и сохраняет их в объекте (без сохранения в БД).
+     */
+    public function generateManagementTokens()
+    {
+        $sec = \Yii::$app->security;
+        // (base62-ish)
+        $this->edit_token = $sec->generateRandomString(48);
+        $this->delete_token = $sec->generateRandomString(48);
+    }
+
+    /**
+     * Проверка возможности редактирования: не удалён, имеется edit_token и время публикации в пределах 12 часов.
+     */
+    public function canEdit(): bool
+    {
+        if ($this->deleted_at) {
+            return false;
+        }
+        if (empty($this->edit_token) || empty($this->published_at)) {
+            return false;
+        }
+        $now = time();
+        return ($this->published_at + self::EDIT_WINDOW_SECONDS) >= $now;
+    }
+
+    /**
+     * Проверка возможности удаления: не удалён, имеется delete_token и время публикации в пределах 14 дней.
+     */
+    public function canDelete(): bool
+    {
+        if ($this->deleted_at) {
+            return false;
+        }
+        if (empty($this->delete_token) || empty($this->published_at)) {
+            return false;
+        }
+        $now = time();
+        return ($this->published_at + self::DELETE_WINDOW_SECONDS) >= $now;
+    }
+
+    /**
+     * Возвращает публичные URLs (полные) для управления постом
+     */
+    public function getEditUrl($absolute = true)
+    {
+        return Url::to(['site/edit-topic', 'token' => $this->edit_token], $absolute);
+    }
+
+    public function getDeleteUrl($absolute = true)
+    {
+        return Url::to(['site/delete-confirm', 'token' => $this->delete_token], $absolute);
+    }
+
+    /**
+     * Soft-delete: устанавливаем deleted_at = time() и сохраняем. Не физически удаляем.
+     */
+    public function softDelete()
+    {
+        $this->deleted_at = time();
+        return $this->save(false, ['deleted_at', 'updated_at']); // save without validation
+    }
+
     /**
      * Setter helper for Author
      */
@@ -170,7 +238,7 @@ class Topic extends ActiveRecord
         if ($author->save()) {
             $this->link('author', $author);
             return true;
-        } 
+        }
         SvAppHelper::showErrors($this, 'Topic error');
         return false;
     }
@@ -183,12 +251,14 @@ class Topic extends ActiveRecord
     public function setExcerpt($value)
     {
         if (is_array($value)) {
-            $phs = array_values(array_filter($value, function($val) {
+            $phs = array_values(array_filter($value, function ($val) {
                 return trim($val) !== '';
             }));
             $ex = implode("\n", $phs);
             $this->setAttribute('excerpt', $ex);
-        } else $this->setAttribute('excerpt', (string)$value);
+        } else {
+            $this->setAttribute('excerpt', (string)$value);
+        }
     }
 
     /**
@@ -216,7 +286,7 @@ class Topic extends ActiveRecord
     {
         $ex = $this->getExcerpt();
         if (is_array($ex)) {
-            $result = array_values(array_filter($ex, function($value) {
+            $result = array_values(array_filter($ex, function ($value) {
                 return trim($value) !== '';
             }));
             return implode('\n', $result);

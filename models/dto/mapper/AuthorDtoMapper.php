@@ -5,8 +5,10 @@ namespace app\models\dto\mapper;
 use app\models\Author;
 use app\models\dto\AuthorDto;
 
-class AuthorDtoMapper {
-    public static function mapFromAR(Author $author) {
+class AuthorDtoMapper
+{
+    public static function mapFromAR(Author $author)
+    {
         return new AuthorDto(
             $author->id,
             $author->name,
@@ -22,7 +24,8 @@ class AuthorDtoMapper {
      *
      * @return AuthorDto[]
      */
-    public static function mapFromAuthorAR(array $ars) {
+    public static function mapFromAuthorAR(array $ars)
+    {
         $dtos = [];
 
         foreach ($ars as $ar) {

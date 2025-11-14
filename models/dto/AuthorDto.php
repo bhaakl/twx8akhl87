@@ -2,7 +2,8 @@
 
 namespace app\models\dto;
 
-class AuthorDto {
+class AuthorDto
+{
     public function __construct(
         readonly public int $id,
         readonly public string $name,
@@ -10,5 +11,6 @@ class AuthorDto {
         readonly public string $msg,
         readonly public \DateTimeInterface $createdAt,
         readonly public \DateTimeInterface $updated_at,
-    ) {}   
+    ) {
+    }
 }
